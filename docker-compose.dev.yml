@@ -32,6 +32,7 @@ services:
       - ./docs:/app/docs:ro
       - ./router_config.json:/app/router_config.json:ro
       - hf_cache:/root/.cache/huggingface
+    env_file: .env
     environment:
       - CHROMA_HOST=chroma
       - CHROMA_PORT=8000

@@ -1,0 +1,64 @@
+# Production: повний стек в Docker (CPU)
+# Запуск: docker compose up -d --build
+
+services:
+  chroma:
+    image: chromadb/chroma:0.5.23
+    container_name: rag-chroma
+    ports:
+      - "8001:8000"
+    volumes:
+      - chroma_data:/chroma/chroma
+    environment:
+      - ANONYMIZED_TELEMETRY=false
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/api/v1/heartbeat"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    restart: unless-stopped
+
+  ollama:
+    image: ollama/ollama:latest
+    container_name: rag-ollama
+    ports:
+      - "11434:11434"
+    volumes:
+      - ollama_data:/root/.ollama
+    healthcheck:
+      test: ["CMD", "ollama", "list"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
+    restart: unless-stopped
+
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: rag-app
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./docs:/app/docs:ro
+      - ./router_config.json:/app/router_config.json:ro
+      - hf_cache:/root/.cache/huggingface
+    environment:
+      - CHROMA_HOST=chroma
+      - CHROMA_PORT=8000
+      - LLM_BASE_URL=http://ollama:11434/v1
+      - LLM_MODEL=${LLM_MODEL:-qwen2.5:7b}
+      - HF_HOME=/root/.cache/huggingface
+    depends_on:
+      chroma:
+        condition: service_healthy
+      ollama:
+        condition: service_healthy
+    restart: unless-stopped
+
+volumes:
+  chroma_data:
+  ollama_data:
+  hf_cache:

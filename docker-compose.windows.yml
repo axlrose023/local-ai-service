@@ -1,0 +1,96 @@
+# Windows + Docker Desktop + NVIDIA GPU
+#
+# Требования:
+#   1. Docker Desktop с WSL2 backend (Settings → General → Use WSL2)
+#   2. NVIDIA драйвер версии 525+ на Windows
+#   3. В WSL2: NVIDIA Container Toolkit (автоматически с новыми Docker Desktop)
+#
+# Запуск:
+#   docker compose -f docker-compose.windows.yml up -d --build
+#
+# Проверка GPU:
+#   docker exec rag-ollama nvidia-smi
+
+services:
+  chroma:
+    image: chromadb/chroma:0.5.23
+    container_name: rag-chroma
+    ports:
+      - "8001:8000"
+    volumes:
+      - chroma_data:/chroma/chroma
+    environment:
+      - ANONYMIZED_TELEMETRY=false
+    healthcheck:
+      test: [ "CMD", "curl", "-f", "http://localhost:8000/api/v1/heartbeat" ]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    restart: unless-stopped
+
+  ollama:
+    image: ollama/ollama:latest
+    container_name: rag-ollama
+    ports:
+      - "11434:11434"
+    volumes:
+      - ollama_data:/root/.ollama
+    environment:
+      # Ollama использует все GPU по умолчанию
+      - OLLAMA_NUM_PARALLEL=4
+      - OLLAMA_MAX_LOADED_MODELS=2
+    healthcheck:
+      test: [ "CMD", "ollama", "list" ]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+    restart: unless-stopped
+    # GPU - все видеокарты
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [ gpu ]
+
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: rag-app
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./docs:/app/docs:ro
+      - ./router_config.json:/app/router_config.json:ro
+      - hf_cache:/root/.cache/huggingface
+    environment:
+      - CHROMA_HOST=chroma
+      - CHROMA_PORT=8000
+      - LLM_BASE_URL=http://ollama:11434/v1
+      - LLM_MODEL=${LLM_MODEL:-qwen2.5:7b}
+      - HF_HOME=/root/.cache/huggingface
+      # Для PyTorch/CUDA в app (если нужно)
+      - CUDA_VISIBLE_DEVICES=0
+    depends_on:
+      chroma:
+        condition: service_healthy
+      ollama:
+        condition: service_healthy
+    restart: unless-stopped
+    # GPU для embeddings
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [ gpu ]
+
+volumes:
+  chroma_data:
+  ollama_data:
+  hf_cache:

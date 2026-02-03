@@ -1,0 +1,93 @@
+{
+    "workbench.colorTheme": "Darcula",
+    "workbench.iconTheme": "material-icon-theme",
+    "material-icon-theme.files.associations": {
+        "__init__.py": "package",
+        "*.py": "python",
+        "test_*.py": "test-python",
+        "conftest.py": "test-python"
+    },
+    "material-icon-theme.folders.theme": "none",
+    "material-icon-theme.folders.associations": {},
+    "workbench.colorCustomizations": {
+        "editor.background": "#313131",
+        "sideBar.background": "#313131",
+        "sideBar.border": "#3A3A3A",
+        "sideBarSectionHeader.background": "#313131",
+        "sideBarSectionHeader.border": "#3A3A3A"
+    },
+    "workbench.activityBar.location": "top",
+    "workbench.statusBar.visible": true,
+    "window.menuBarVisibility": "compact",
+    "breadcrumbs.enabled": true,
+    "explorer.compactFolders": false,
+    "workbench.tree.renderIndentGuides": "always",
+    "explorer.confirmDelete": false,
+    "explorer.confirmDragAndDrop": false,
+    "explorer.decorations.colors": false,
+    "explorer.decorations.badges": false,
+    "explorer.openEditors.visible": 0,
+    // ===== Табы =====
+    "workbench.editor.showTabs": "multiple",
+    "workbench.editor.tabSizing": "shrink",
+    "workbench.editor.wrapTabs": false,
+    // ===== Редактор =====
+    "editor.fontFamily": "JetBrains Mono, Menlo, Monaco, 'Courier New', monospace",
+    "editor.fontLigatures": true,
+    "editor.fontSize": 13,
+    "editor.lineHeight": 22,
+    "editor.smoothScrolling": true,
+    "editor.minimap.enabled": false,
+    "editor.renderWhitespace": "boundary",
+    "editor.guides.indentation": true,
+    "editor.renderLineHighlight": "gutter",
+    "editor.cursorSmoothCaretAnimation": "on",
+    "editor.scrollBeyondLastLine": true,
+    "editor.hover.delay": 300,
+    "workbench.tree.fontSize": 14,
+    "workbench.tree.indent": 14,
+    // ===== Подсказки =====
+    "editor.codeLens": false,
+    "editor.inlayHints.enabled": "offUnlessPressed",
+    "problems.showCurrentInStatus": true,
+    // ===== Python =====
+    "python.defaultInterpreterPath": "python",
+    "python.analysis.typeCheckingMode": "basic",
+    "python.analysis.inlayHints.functionReturnTypes": false,
+    "python.analysis.inlayHints.variableTypes": false,
+    "ruff.enable": true,
+    "ruff.lint.run": "onType",
+    "ruff.format.onSave": true,
+    "ruff.lint.args": [
+        "--ignore=F401"
+    ],
+    "git.decorations.enabled": true,
+    "scm.diffDecorations": "all",
+    "diffEditor.renderIndicators": true,
+    "terminal.integrated.fontFamily": "JetBrains Mono",
+    "terminal.integrated.cursorStyle": "block",
+    "[python]": {
+        "editor.defaultFormatter": "charliermarsh.ruff"
+    },
+    "python.formatting.provider": "none",
+    "editor.formatOnSave": true,
+    "editor.codeActionsOnSave": {
+        "source.organizeImports": "explicit"
+    },
+    "python.analysis.autoImportCompletions": true,
+    "python.analysis.indexing": true,
+    "python.analysis.diagnosticMode": "workspace",
+    "sqltools.connections": [
+        {
+            "ssh": "Disabled",
+            "previewLimit": 50,
+            "server": "localhost",
+            "port": 54377,
+            "driver": "PostgreSQL",
+            "name": "HelperCore Database",
+            "database": "db",
+            "username": "user",
+            "password": "password"
+        }
+    ]
+}

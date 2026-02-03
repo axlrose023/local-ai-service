@@ -1,0 +1,82 @@
+CHANGES LOG
+===========
+
+## 2026-02-02: Покращення фільтрації джерел RAG
+
+### Проблема
+RAG повертав 5 джерел навіть для простих питань ("Де кавова машина?"),
+хоча релевантним був тільки 1 документ.
+
+### Причина
+- rag_reranker_threshold = -5.0 (занадто низький, пропускав все)
+- Фіксований top_k = 5 без урахування якості результатів
+
+### Рішення
+1. Підняли rag_reranker_threshold з -5.0 до 0.0
+2. Додали динамічний cutoff: якщо score < max_score * 0.3 — відкидаємо
+   (якщо топ-1 має score 5.0, то документи зі score < 1.5 не потраплять)
+
+### Змінені файли
+- config.py: rag_reranker_threshold = 0.0
+- rag.py: додано _apply_score_cutoff() з відносним порогом 0.3
+
+---
+
+## 2026-02-02: Розширення keywords у роутері
+
+### Проблема
+Питання "Де знаходиться кавова машина" не направлялося в RAG,
+хоча "кава" є в keywords. Причина: можливо кодування або потрібні варіанти слів.
+
+### Рішення
+Додано варіанти: "кавов", "кавомашин", "кухні"
+
+### Змінені файли
+- router_config.json: розширено keywords
+
+---
+
+## 2026-02-02: Покращення промптів LLM
+
+### Проблема
+Бот давав занадто короткі відповіді на процедурні питання
+("Що треба щоб створити обліковий запис?"), пропускаючи важливі деталі.
+
+### Причина
+Промпт жорстко обмежував: "2-4 речення максимум"
+
+### Рішення
+Зроблено промпт адаптивним:
+- Прості питання (де, хто) → коротко
+- Процедурні питання (як зробити) → повна інструкція
+
+### Змінені файли
+- llm.py: оновлено SYSTEM_PROMPT і PROMPT_WITH_CONTEXT
+
+---
+
+## 2026-02-02: SOLID рефакторинг
+
+### Що зроблено
+Повний рефакторинг з SOLID принципами:
+- SRP: розділення RAGService на SearchService + strategies
+- DIP: Protocol інтерфейси для всіх залежностей
+- OCP: strategies для scoring (можна додавати нові)
+
+### Нова структура
+```
+src/
+├── core/
+│   ├── protocols/     # Інтерфейси (EmbedderProtocol, etc.)
+│   ├── services/      # SearchService, ChatService, RouterService, IngestService
+│   ├── models/        # SearchResult, ChatHistory
+│   └── strategies/    # ScoreCutoffStrategy, KeywordBoostStrategy
+├── infrastructure/    # Реалізації (ChromaVectorStore, OllamaClient, etc.)
+├── presentation/      # chainlit_app.py, cli.py
+├── config/           # settings.py
+└── container.py      # DI контейнер
+```
+
+### Entry point
+- entrypoint.sh: python -m src.presentation.cli startup
+- Старі файли збережені для сумісності

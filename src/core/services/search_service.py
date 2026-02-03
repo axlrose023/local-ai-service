@@ -107,10 +107,12 @@ class SearchService:
         if not results:
             return ""
 
-        return "\n\n".join(
-            f"[Документ: {r.source} (Relevance: {r.score:.2f})]\n{r.content}"
-            for r in results
-        )
+        parts = []
+        for i, r in enumerate(results, 1):
+            source_name = r.source.rsplit(".", 1)[0].replace("_", " ").lstrip("0123456789 ")
+            parts.append(f"[{i}] {source_name}:\n{r.content}")
+
+        return "\n\n".join(parts)
 
     def _get_unique_sources(self, results: list[SearchResult]) -> list[str]:
         """Get unique source filenames."""

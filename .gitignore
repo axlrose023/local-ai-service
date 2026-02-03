@@ -24,9 +24,14 @@ htmlcov/
 
 # IDE
 .idea/
+.vscode/
 *.swp
 *.swo
 *~
+
+# Chainlit (runtime / local; config.toml и translations оставляем в репо)
+.chainlit/.env
+.chainlit/.project
 
 # Secrets & env
 .env

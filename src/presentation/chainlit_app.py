@@ -33,7 +33,11 @@ async def start():
 async def main(message: cl.Message):
     """Handle user message."""
     user_input = message.content
-    history: ChatHistory = cl.user_session.get("history")
+    history: ChatHistory | None = cl.user_session.get("history")
+    if history is None:
+        # Defensive init in case on_chat_start hasn't run yet
+        history = ChatHistory()
+        cl.user_session.set("history", history)
 
     chat_service = container.resolve(ChatService)
 
@@ -61,8 +65,9 @@ async def main(message: cl.Message):
                 await msg.stream_token(token)
 
     except Exception as e:
-        full_response = f"Помилка при генерації відповіді: {str(e)}"
-        await msg.stream_token(full_response)
+        error_text = f"\n\nПомилка при генерації відповіді: {str(e)}"
+        full_response += error_text
+        await msg.stream_token(error_text)
 
     await msg.update()
 

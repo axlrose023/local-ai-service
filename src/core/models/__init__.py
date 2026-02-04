@@ -1,6 +1,7 @@
 """Domain models."""
 from .document import SearchResult, Chunk, SearchResponse
 from .chat import ChatMessage, ChatHistory
+from .template import TemplateInfo, TemplateMatch, MatchConfidence
 
 __all__ = [
     "SearchResult",
@@ -8,4 +9,7 @@ __all__ = [
     "SearchResponse",
     "ChatMessage",
     "ChatHistory",
+    "TemplateInfo",
+    "TemplateMatch",
+    "MatchConfidence",
 ]

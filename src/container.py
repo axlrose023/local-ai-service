@@ -68,6 +68,7 @@ def configure_container(settings: Settings) -> Container:
     from .core.services.ingest_service import IngestService
     from .core.services.router_service import RouterService
     from .core.services.search_service import SearchService
+    from .core.services.template_service import TemplateService
     from .infrastructure.embeddings.sentence_transformer import (
         SentenceTransformerEmbedder,
     )
@@ -152,6 +153,18 @@ def configure_container(settings: Settings) -> Container:
             docs_path=settings.docs_path,
             chunk_size=settings.chunk_size,
             chunk_overlap=settings.chunk_overlap,
+        ),
+        singleton=True,
+    )
+
+    container.register(
+        TemplateService,
+        lambda: TemplateService(
+            embedder=container.resolve(EmbedderProtocol),
+            templates_path=settings.templates_path,
+            config_path=settings.templates_config_path,
+            high_threshold=settings.templates_high_threshold,
+            low_threshold=settings.templates_low_threshold,
         ),
         singleton=True,
     )

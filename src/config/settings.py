@@ -31,6 +31,12 @@ class Settings(BaseSettings):
     router_config_path: str = "router_config.json"
     router_threshold: float = 0.78
 
+    # Templates
+    templates_path: str = "./templates"
+    templates_config_path: str = "templates_config.json"
+    templates_high_threshold: float = 0.85
+    templates_low_threshold: float = 0.82
+
     class Config:
         env_file = ".env"
         extra = "ignore"

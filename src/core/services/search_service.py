@@ -97,11 +97,12 @@ class SearchService:
                 results=results,
                 context=self._format_context(results),
                 sources=self._get_unique_sources(results),
+                search_query=query,
             )
 
         except Exception as e:
             logger.error(f"Search error: {e}")
-            return SearchResponse(results=[], context="", sources=[])
+            return SearchResponse(results=[], context="", sources=[], search_query=query)
 
     def _format_context(self, results: list[SearchResult]) -> str:
         """Format results as context for LLM."""

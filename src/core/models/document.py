@@ -33,3 +33,4 @@ class SearchResponse:
     results: list[SearchResult]
     context: str
     sources: list[str]
+    search_query: str | None = None

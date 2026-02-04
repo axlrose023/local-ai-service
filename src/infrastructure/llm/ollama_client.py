@@ -79,6 +79,21 @@ MODE_GENERAL_PROMPT = """РЕЖИМ: ЗАГАЛЬНІ ЗНАННЯ.
 - Не згадуй документи чи базу знань. Не використовуй фрази на кшталт "у документах".
 - Якщо користувач питає про джерело — скажи, що це загальні знання, а не документи компанії."""
 
+SEARCH_QUERY_REWRITE_PROMPT = """Ти — генератор пошукових запитів для RAG.
+Переформулюй останнє питання користувача в самодостатній запит для пошуку по документах.
+
+Правила:
+- Поверни лише текст запиту без пояснень.
+- Якщо питання вже самодостатнє, поверни його майже без змін.
+- Якщо це уточнення (наприклад "а скільки днів?"), додай потрібний контекст з історії.
+- Не вигадуй нових фактів, назв або термінів, яких не було у діалозі.
+
+Приклад:
+Історія: [user: Як оформити відпустку?] [assistant: ...]
+Питання: А скільки днів дають?
+Запит: Скільки днів відпустки надається співробітнику?
+"""
+
 PROMPT_WITH_CONTEXT = """Нижче наведено фрагменти з документів компанії.
 
 {context}
@@ -254,3 +269,39 @@ class OllamaClient:
         async for chunk in response:
             if chunk.choices[0].delta.content:
                 yield chunk.choices[0].delta.content
+
+    async def generate_search_query(
+        self,
+        user_message: str,
+        history: list[dict] | None = None,
+    ) -> str:
+        """Rewrite user query into a standalone search query."""
+        if not history:
+            return user_message
+
+        messages: list[dict] = [
+            {"role": "system", "content": SEARCH_QUERY_REWRITE_PROMPT},
+        ]
+        messages.extend(history[-4:])
+        messages.append(
+            {"role": "user", "content": f"Останнє питання користувача: {user_message}"}
+        )
+
+        try:
+            response = await self._client.chat.completions.create(
+                model=self._model,
+                messages=messages,
+                max_tokens=100,
+                temperature=0.1,
+            )
+            rewritten = (response.choices[0].message.content or "").strip()
+            if not rewritten:
+                return user_message
+
+            logger.info(
+                f"[rewrite] Search query: '{user_message[:60]}...' -> '{rewritten[:120]}...'"
+            )
+            return rewritten
+        except Exception as e:
+            logger.warning(f"[rewrite] Failed, using original query: {e}")
+            return user_message

@@ -100,8 +100,13 @@ class ChatService:
             return
 
         if signal == _SEARCH_SIGNAL:
+            rewrite_history = history_list if history_list else recent_history
+            search_query = await self._llm.generate_search_query(
+                user_message=user_message,
+                history=rewrite_history,
+            )
             # Phase 2: Search DB
-            search_response = self._search.search(user_message)
+            search_response = self._search.search(search_query)
             if not search_response.results:
                 yield ("", search_response, "docs", None)
                 yield ("В документах компанії немає інформації з цього питання.", None, "docs", None)
@@ -138,7 +143,11 @@ class ChatService:
         """
         history_list = history.to_list()
 
-        search_response = self._search.search(user_message)
+        search_query = await self._llm.generate_search_query(
+            user_message=user_message,
+            history=history_list,
+        )
+        search_response = self._search.search(search_query)
         if not search_response.results:
             yield ("", search_response, "docs", None)
             yield ("В документах компанії немає інформації з цього питання.", None, "docs", None)

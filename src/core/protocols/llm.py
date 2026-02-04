@@ -42,3 +42,19 @@ class LLMProtocol(Protocol):
             Response tokens.
         """
         ...
+
+    async def generate_search_query(
+        self,
+        user_message: str,
+        history: list[dict] | None = None,
+    ) -> str:
+        """Rewrite a user message into a standalone search query.
+
+        Args:
+            user_message: User's original message.
+            history: Recent dialog history (optional).
+
+        Returns:
+            Rewritten query suitable for retrieval.
+        """
+        ...

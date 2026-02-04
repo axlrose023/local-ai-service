@@ -130,10 +130,20 @@ async def _run_search_flow(user_input: str, history: ChatHistory) -> None:
             user_input,
             history,
         ):
-            if search_response and search_response.results:
+            if search_response:
+                search_query = (search_response.search_query or user_input).strip()
                 async with cl.Step(name="Пошук у базі знань") as step:
                     step.input = user_input
-                    step.output = f"Знайдено {len(search_response.results)} релевантних фрагментів"
+                    if search_response.results:
+                        step.output = (
+                            f"Пошуковий запит: {search_query}\n"
+                            f"Знайдено {len(search_response.results)} релевантних фрагментів"
+                        )
+                    else:
+                        step.output = (
+                            f"Пошуковий запит: {search_query}\n"
+                            "Релевантні документи не знайдено"
+                        )
                     last_sources = search_response.sources
 
             if token:
@@ -182,12 +192,19 @@ async def _run_standard_flow(user_input: str, history: ChatHistory) -> None:
                 return
 
             if search_response and not search_shown:
+                search_query = (search_response.search_query or user_input).strip()
                 async with cl.Step(name="Пошук у базі знань") as step:
                     step.input = user_input
                     if search_response.results:
-                        step.output = f"Знайдено {len(search_response.results)} релевантних фрагментів"
+                        step.output = (
+                            f"Пошуковий запит: {search_query}\n"
+                            f"Знайдено {len(search_response.results)} релевантних фрагментів"
+                        )
                     else:
-                        step.output = "Релевантні документи не знайдено"
+                        step.output = (
+                            f"Пошуковий запит: {search_query}\n"
+                            "Релевантні документи не знайдено"
+                        )
                     last_sources = search_response.sources
                 search_shown = True
 

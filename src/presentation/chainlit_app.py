@@ -12,12 +12,14 @@ from src.container import configure_container, container
 from src.core.models.chat import ChatHistory
 from src.core.models.template import MatchConfidence
 from src.core.protocols.embedder import EmbedderProtocol
+from src.core.protocols.llm import LLMProtocol
 from src.core.services.chat_service import ChatService
 from src.core.services.template_service import TemplateService
 
 configure_container(settings)
 
-_CJK_RE = re.compile(r"[\u3040-\u30ff\u3400-\u4dbf\u4e00-\u9fff\uac00-\ud7af]")
+# CJK characters + CJK punctuation (，。？！：；、）
+_CJK_RE = re.compile(r"[\u3000-\u303f\u3040-\u30ff\u3400-\u4dbf\u4e00-\u9fff\uac00-\ud7af\uff00-\uffef]")
 _LATIN_RE = re.compile(r"[A-Za-z]")
 _CYR_RE = re.compile(r"[А-Яа-яІіЇїЄєҐґ]")
 
@@ -94,7 +96,20 @@ def _is_source_question(text: str) -> bool:
 async def _handle_template(user_input: str, history: ChatHistory) -> None:
     """Handle LLM-detected template request using semantic matching."""
     template_service = container.resolve(TemplateService)
-    template_match = template_service.match(user_input)
+    llm = container.resolve(LLMProtocol)
+
+    # Build context-aware query for template matching
+    # e.g. "А є приклад?" + history about відпустка → "шаблон заяви на відпустку"
+    history_list = history.to_list()
+    if history_list:
+        expanded_query = await llm.generate_search_query(
+            user_message=user_input,
+            history=history_list,
+        )
+    else:
+        expanded_query = user_input
+
+    template_match = template_service.match(expanded_query)
 
     if template_match and template_match.path.exists():
         if template_match.confidence in (MatchConfidence.HIGH, MatchConfidence.MEDIUM):

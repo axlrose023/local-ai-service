@@ -37,8 +37,12 @@ class ChatService:
         self._fallback_min_score = fallback_min_score
 
     async def process_message(
-        self, user_message: str, history: ChatHistory
-    ) -> AsyncIterator[tuple[str, Optional[SearchResponse]]]:
+        self,
+        user_message: str,
+        history: ChatHistory,
+        carryover_context: str | None = None,
+        carryover_query: str | None = None,
+    ) -> AsyncIterator[tuple[str, Optional[SearchResponse], str, str | None]]:
         """Process user message and stream response.
 
         Args:
@@ -46,13 +50,16 @@ class ChatService:
             history: Chat history.
 
         Yields:
-            Tuples of (token, search_response).
+            Tuples of (token, search_response, answer_mode, context_used).
             search_response is only set on first yield.
         """
         search_response: Optional[SearchResponse] = None
         context: str | None = None
+        context_used: str | None = None
+        answer_mode = "general"
 
         if self._router.should_search(user_message):
+            answer_mode = "docs"
             search_response = self._search.search(user_message)
 
             if search_response.results:
@@ -60,24 +67,44 @@ class ChatService:
                 if best_score >= self._fallback_min_score:
                     context = search_response.context
                 else:
-                    context = None
-                    logger.info(
-                        f"Fallback to general knowledge: best_score={best_score:.2f} "
-                        f"< {self._fallback_min_score} for '{user_message[:50]}...'"
-                    )
+                    if self._router.has_keyword(user_message):
+                        context = search_response.context
+                        logger.info(
+                            f"Docs kept due to keyword despite low score: {best_score:.2f} "
+                            f"< {self._fallback_min_score} for '{user_message[:50]}...'"
+                        )
+                    else:
+                        context = ""
+                        logger.info(
+                            f"Docs skipped (weak score): best_score={best_score:.2f} "
+                            f"< {self._fallback_min_score} for '{user_message[:50]}...'"
+                        )
             else:
-                # No results survived filtering — fall back to general knowledge.
-                context = None
+                # No results survived filtering — doc-only mode with empty context.
+                context = ""
                 logger.info(
                     f"No results after filtering for '{user_message[:50]}...', "
-                    "falling back to general knowledge"
+                    "replying with 'no info in docs'"
                 )
 
-        yield ("", search_response)
+        # Carry over previous docs context for short related follow-ups.
+        if (context is None or not context.strip()) and carryover_context and carryover_query:
+            if self._router.is_related(user_message, carryover_query):
+                context = carryover_context
+                answer_mode = "docs"
+                logger.info(
+                    f"Using carryover context for '{user_message[:50]}...' "
+                    f"related to '{carryover_query[:50]}...'"
+                )
+
+        if context is not None and context.strip():
+            context_used = context
+
+        yield ("", search_response, answer_mode, context_used)
 
         history_list = self._router.select_history(user_message, history)
 
         async for token in self._llm.chat_stream(
             user_message=user_message, context=context, history=history_list
         ):
-            yield (token, None)
+            yield (token, None, answer_mode, context_used)

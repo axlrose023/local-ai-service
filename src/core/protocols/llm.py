@@ -6,6 +6,25 @@ from typing import Protocol, AsyncIterator, runtime_checkable
 class LLMProtocol(Protocol):
     """Protocol for LLM client."""
 
+    async def classify_and_stream(
+        self,
+        user_message: str,
+        history: list[dict] | None = None,
+    ) -> AsyncIterator[str]:
+        """Classify query and stream response.
+
+        If the query needs corporate documents, yields a search signal.
+        Otherwise yields answer tokens directly.
+
+        Args:
+            user_message: User's message.
+            history: Chat history (optional).
+
+        Yields:
+            Search signal or response tokens.
+        """
+        ...
+
     async def chat_stream(
         self,
         user_message: str,

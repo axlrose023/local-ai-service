@@ -59,6 +59,78 @@ def _is_source_question(text: str) -> bool:
     return any(p in t for p in patterns)
 
 
+async def _handle_template(user_input: str, history: ChatHistory) -> None:
+    """Handle LLM-detected template request using semantic matching."""
+    template_service = container.resolve(TemplateService)
+    template_match = template_service.match(user_input)
+
+    if template_match and template_match.path.exists():
+        if template_match.confidence in (MatchConfidence.HIGH, MatchConfidence.MEDIUM):
+            description = template_match.template.description
+            response = (
+                f"Ось шаблон **{template_match.display_name}**:\n\n"
+                f"{description}"
+            )
+            await cl.Message(
+                content=response,
+                elements=[cl.File(name=template_match.file_name, path=str(template_match.path))]
+            ).send()
+            history.add_pair(user_input, response)
+            cl.user_session.set("last_answer_source", "general")
+            return
+
+    # No matching template found — fall back to search flow
+    await _run_search_flow(user_input, history)
+
+
+async def _run_search_flow(user_input: str, history: ChatHistory) -> None:
+    """Fallback: run RAG search flow (skips LLM classification)."""
+    chat_service = container.resolve(ChatService)
+
+    carryover_context = cl.user_session.get("last_doc_context")
+    carryover_query = cl.user_session.get("last_doc_query")
+
+    msg = cl.Message(content="")
+    await msg.send()
+
+    full_response = ""
+    last_sources: list[str] = []
+    context_used: str | None = None
+
+    try:
+        async for token, search_response, mode, used_context in chat_service.search_and_respond(
+            user_input,
+            history,
+            carryover_context=carryover_context,
+            carryover_query=carryover_query,
+        ):
+            context_used = used_context
+            if search_response and search_response.results:
+                async with cl.Step(name="Пошук у базі знань") as step:
+                    step.input = user_input
+                    step.output = f"Знайдено {len(search_response.results)} релевантних фрагментів"
+                    last_sources = search_response.sources
+
+            if token:
+                full_response += token
+                await msg.stream_token(token)
+
+    except Exception as e:
+        error_text = f"\n\nПомилка при генерації відповіді: {str(e)}"
+        full_response += error_text
+        await msg.stream_token(error_text)
+
+    await msg.update()
+
+    history.add_pair(user_input, full_response)
+    cl.user_session.set("last_answer_source", "docs")
+    if last_sources:
+        cl.user_session.set("last_doc_sources", last_sources)
+    if context_used:
+        cl.user_session.set("last_doc_context", context_used)
+        cl.user_session.set("last_doc_query", user_input)
+
+
 async def _run_standard_flow(user_input: str, history: ChatHistory) -> None:
     chat_service = container.resolve(ChatService)
 
@@ -83,6 +155,13 @@ async def _run_standard_flow(user_input: str, history: ChatHistory) -> None:
         ):
             answer_mode = mode
             context_used = used_context
+
+            if answer_mode == "template":
+                # LLM detected template request — close this message and delegate
+                await msg.remove()
+                await _handle_template(user_input, history)
+                return
+
             if search_response and not search_shown:
                 async with cl.Step(name="Пошук у базі знань") as step:
                     step.input = user_input
@@ -174,93 +253,10 @@ async def main(message: cl.Message):
 
     # Extract meaningful query from multi-line messages
     router = container.resolve(RouterService)
-    query, is_all_casual = _extract_meaningful_query(user_input, router)
+    query, _ = _extract_meaningful_query(user_input, router)
 
-    # Handle fully casual messages
-    if is_all_casual:
-        text = user_input.lower()
-        if any(k in text for k in ["дякую", "спасибо"]):
-            response = "Будь ласка! Якщо буде ще щось — звертайтеся."
-        elif any(k in text for k in ["привіт", "вітаю", "добрий день", "hello", "hi", "хай"]):
-            response = "Вітаю! Чим можу допомогти?"
-        elif any(k in text for k in ["бувай", "до побачення", "пока"]):
-            response = "До побачення! Гарного дня!"
-        else:
-            response = "Зрозуміло. Якщо є питання — я тут, щоб допомогти!"
-        await cl.Message(content=response).send()
-        history.add_pair(user_input, response)
-        cl.user_session.set("last_answer_source", "general")
-        return
-
-    # Check for template request (using extracted query)
-    template_service = container.resolve(TemplateService)
-    template_match = template_service.match(query)
-
-    if template_match:
-        if template_match.confidence == MatchConfidence.HIGH:
-            if template_match.path.exists():
-                response = f"Ось шаблон **{template_match.display_name}**:"
-                await cl.Message(
-                    content=response,
-                    elements=[cl.File(name=template_match.file_name, path=str(template_match.path))]
-                ).send()
-            else:
-                response = (
-                    f"Шаблон **{template_match.display_name}** наразі недоступний. "
-                    "Зверніться до адміністратора."
-                )
-                await cl.Message(content=response).send()
-            history.add_pair(user_input, response)
-            cl.user_session.set("last_answer_source", "general")
-            return
-
-        elif template_match.confidence == MatchConfidence.MEDIUM:
-            cl.user_session.set("pending_template", template_match)
-            cl.user_session.set("pending_template_query", user_input)
-            response = f"Можливо, вам потрібен шаблон **{template_match.display_name}**?"
-            await cl.Message(
-                content=response,
-                actions=[
-                    cl.Action(name="download_template", value="yes", label="Так, завантажити"),
-                    cl.Action(name="download_template", value="no", label="Ні, просто відповідь")
-                ]
-            ).send()
-            history.add_pair(user_input, response)
-            return
-
-    # Standard RAG flow (use extracted query for search, but keep original for history)
+    # Standard flow — LLM decides search/template/general
     await _run_standard_flow(query, history)
-
-
-@cl.action_callback("download_template")
-async def on_template_action(action: cl.Action):
-    history: ChatHistory | None = cl.user_session.get("history")
-    if history is None:
-        history = ChatHistory()
-        cl.user_session.set("history", history)
-
-    if action.value == "yes":
-        template_match = cl.user_session.get("pending_template")
-        if template_match and template_match.path.exists():
-            await cl.Message(
-                content=f"Ось шаблон **{template_match.display_name}**:",
-                elements=[cl.File(name=template_match.file_name, path=str(template_match.path))]
-            ).send()
-        else:
-            await cl.Message(
-                content="Шаблон наразі недоступний."
-            ).send()
-    else:
-        original_query = cl.user_session.get("pending_template_query")
-        if original_query:
-            await _run_standard_flow(original_query, history)
-        else:
-            await cl.Message(
-                content="Добре, продовжуємо без шаблону. Напишіть питання ще раз."
-            ).send()
-
-    cl.user_session.set("pending_template", None)
-    cl.user_session.set("pending_template_query", None)
 
 
 @cl.on_stop

@@ -70,6 +70,7 @@ class SearchService:
         top_k = top_k or self._top_k
 
         try:
+            logger.info("Search query: %r", query)
             query_embedding = self._embedder.encode(f"query: {query}").tolist()
 
             results = self._vector_store.query(

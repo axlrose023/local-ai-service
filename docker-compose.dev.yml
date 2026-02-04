@@ -31,7 +31,6 @@ services:
     volumes:
       - ./docs:/app/docs:ro
       - ./templates:/app/templates:ro
-      - ./router_config.json:/app/router_config.json:ro
       - ./templates_config.json:/app/templates_config.json:ro
       - hf_cache:/root/.cache/huggingface
     env_file: .env

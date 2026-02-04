@@ -1,4 +1,5 @@
 
+import re
 import sys
 from pathlib import Path
 
@@ -12,31 +13,62 @@ from src.core.models.chat import ChatHistory
 from src.core.models.template import MatchConfidence
 from src.core.protocols.embedder import EmbedderProtocol
 from src.core.services.chat_service import ChatService
-from src.core.services.router_service import RouterService
 from src.core.services.template_service import TemplateService
 
 configure_container(settings)
 
+_CJK_RE = re.compile(r"[\u3040-\u30ff\u3400-\u4dbf\u4e00-\u9fff\uac00-\ud7af]")
+_LATIN_RE = re.compile(r"[A-Za-z]")
+_CYR_RE = re.compile(r"[А-Яа-яІіЇїЄєҐґ]")
 
-def _extract_meaningful_query(text: str, router: RouterService) -> tuple[str, bool]:
-    """Extract meaningful query from a possibly multi-line message.
+_LATIN_TO_CYR = {
+    "A": "А", "a": "а",
+    "B": "Б", "b": "б",
+    "C": "С", "c": "с",
+    "D": "Д", "d": "д",
+    "E": "Е", "e": "е",
+    "F": "Ф", "f": "ф",
+    "G": "Г", "g": "г",
+    "H": "Х", "h": "х",
+    "I": "І", "i": "і",
+    "J": "Й", "j": "й",
+    "K": "К", "k": "к",
+    "L": "Л", "l": "л",
+    "M": "М", "m": "м",
+    "N": "Н", "n": "н",
+    "O": "О", "o": "о",
+    "P": "П", "p": "п",
+    "Q": "К", "q": "к",
+    "R": "Р", "r": "р",
+    "S": "С", "s": "с",
+    "T": "Т", "t": "т",
+    "U": "У", "u": "у",
+    "V": "В", "v": "в",
+    "W": "В", "w": "в",
+    "X": "Х", "x": "х",
+    "Y": "И", "y": "и",
+    "Z": "З", "z": "з",
+}
 
-    Returns:
-        (query, is_all_casual): If the message mixes casual lines with real
-        questions, returns only the substantive parts. If everything is casual,
-        returns the original text with is_all_casual=True.
-    """
-    lines = [line.strip() for line in text.strip().split("\n") if line.strip()]
 
-    if len(lines) <= 1:
-        return text.strip(), router.is_casual(text)
+def _normalize_output(text: str) -> str:
+    """Normalize LLM output: strip CJK and fix mixed-script words."""
+    if not text:
+        return text
 
-    substantive = [line for line in lines if not router.is_casual(line)]
+    cleaned = _CJK_RE.sub("", text)
+    cleaned = re.sub(r"(?i)\bзупинись\b", "", cleaned)
 
-    if not substantive:
-        return text.strip(), True
+    def fix_token(token: str) -> str:
+        if _LATIN_RE.search(token) and _CYR_RE.search(token):
+            return "".join(_LATIN_TO_CYR.get(ch, ch) for ch in token)
+        return token
 
-    return "\n".join(substantive), False
+    parts = re.split(r"(\s+)", cleaned)
+    parts = [fix_token(p) if not p.isspace() else p for p in parts]
+    normalized = "".join(parts)
+    normalized = re.sub(r"[ \t]{2,}", " ", normalized)
+    return normalized.strip()
 
 
 def _is_source_question(text: str) -> bool:
@@ -87,24 +119,17 @@ async def _run_search_flow(user_input: str, history: ChatHistory) -> None:
     """Fallback: run RAG search flow (skips LLM classification)."""
     chat_service = container.resolve(ChatService)
 
-    carryover_context = cl.user_session.get("last_doc_context")
-    carryover_query = cl.user_session.get("last_doc_query")
-
     msg = cl.Message(content="")
     await msg.send()
 
     full_response = ""
     last_sources: list[str] = []
-    context_used: str | None = None
 
     try:
-        async for token, search_response, mode, used_context in chat_service.search_and_respond(
+        async for token, search_response, _, _ in chat_service.search_and_respond(
             user_input,
             history,
-            carryover_context=carryover_context,
-            carryover_query=carryover_query,
         ):
-            context_used = used_context
             if search_response and search_response.results:
                 async with cl.Step(name="Пошук у базі знань") as step:
                     step.input = user_input
@@ -120,22 +145,20 @@ async def _run_search_flow(user_input: str, history: ChatHistory) -> None:
         full_response += error_text
         await msg.stream_token(error_text)
 
+    normalized = _normalize_output(full_response)
+    if normalized != full_response:
+        full_response = normalized
+        msg.content = full_response
     await msg.update()
 
     history.add_pair(user_input, full_response)
     cl.user_session.set("last_answer_source", "docs")
     if last_sources:
         cl.user_session.set("last_doc_sources", last_sources)
-    if context_used:
-        cl.user_session.set("last_doc_context", context_used)
-        cl.user_session.set("last_doc_query", user_input)
 
 
 async def _run_standard_flow(user_input: str, history: ChatHistory) -> None:
     chat_service = container.resolve(ChatService)
-
-    carryover_context = cl.user_session.get("last_doc_context")
-    carryover_query = cl.user_session.get("last_doc_query")
 
     msg = cl.Message(content="")
     await msg.send()
@@ -144,17 +167,13 @@ async def _run_standard_flow(user_input: str, history: ChatHistory) -> None:
     search_shown = False
     answer_mode = "general"
     last_sources: list[str] = []
-    context_used: str | None = None
 
     try:
-        async for token, search_response, mode, used_context in chat_service.process_message(
+        async for token, search_response, mode, _ in chat_service.process_message(
             user_input,
             history,
-            carryover_context=carryover_context,
-            carryover_query=carryover_query,
         ):
             answer_mode = mode
-            context_used = used_context
 
             if answer_mode == "template":
                 # LLM detected template request — close this message and delegate
@@ -181,6 +200,10 @@ async def _run_standard_flow(user_input: str, history: ChatHistory) -> None:
         full_response += error_text
         await msg.stream_token(error_text)
 
+    normalized = _normalize_output(full_response)
+    if normalized != full_response:
+        full_response = normalized
+        msg.content = full_response
     await msg.update()
 
     history.add_pair(user_input, full_response)
@@ -188,9 +211,6 @@ async def _run_standard_flow(user_input: str, history: ChatHistory) -> None:
     if answer_mode == "docs":
         if last_sources:
             cl.user_session.set("last_doc_sources", last_sources)
-        if context_used:
-            cl.user_session.set("last_doc_context", context_used)
-            cl.user_session.set("last_doc_query", user_input)
     else:
         cl.user_session.set("last_doc_sources", [])
 
@@ -200,8 +220,6 @@ async def start():
     cl.user_session.set("history", ChatHistory())
     cl.user_session.set("last_answer_source", None)
     cl.user_session.set("last_doc_sources", [])
-    cl.user_session.set("last_doc_context", None)
-    cl.user_session.set("last_doc_query", None)
 
     embedder = container.resolve(EmbedderProtocol)
     embedder.warmup()
@@ -251,12 +269,8 @@ async def main(message: cl.Message):
         history.add_pair(user_input, response)
         return
 
-    # Extract meaningful query from multi-line messages
-    router = container.resolve(RouterService)
-    query, _ = _extract_meaningful_query(user_input, router)
-
     # Standard flow — LLM decides search/template/general
-    await _run_standard_flow(query, history)
+    await _run_standard_flow(user_input.strip(), history)
 
 
 @cl.on_stop

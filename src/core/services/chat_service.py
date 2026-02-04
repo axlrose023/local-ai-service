@@ -6,7 +6,6 @@ from typing import AsyncIterator, Optional
 from ..models.chat import ChatHistory
 from ..models.document import SearchResponse
 from ..protocols.llm import LLMProtocol
-from .router_service import RouterService
 from .search_service import SearchService
 
 logger = logging.getLogger(__name__)
@@ -23,65 +22,32 @@ class ChatService:
         self,
         llm: LLMProtocol,
         search_service: SearchService,
-        router: RouterService,
-        fallback_min_score: float = 0.0,
     ):
         """Initialize chat service.
 
         Args:
             llm: LLM client.
             search_service: Search service.
-            router: Router service.
-            fallback_min_score: Min best-result score to use RAG context.
-                If all results score below this, fall back to general knowledge.
         """
         self._llm = llm
         self._search = search_service
-        self._router = router
-        self._fallback_min_score = fallback_min_score
 
     def _resolve_context(
         self,
         search_response: SearchResponse,
         user_message: str,
-        carryover_context: str | None,
-        carryover_query: str | None,
     ) -> str | None:
-        """Determine final context from search results and carryover."""
+        """Determine final context from search results."""
         context: str | None = None
 
         if search_response.results:
-            best_score = max(r.score for r in search_response.results)
-            if best_score >= self._fallback_min_score:
-                context = search_response.context
-            else:
-                if self._router.has_keyword(user_message):
-                    context = search_response.context
-                    logger.info(
-                        f"Docs kept due to keyword despite low score: {best_score:.2f} "
-                        f"< {self._fallback_min_score} for '{user_message[:50]}...'"
-                    )
-                else:
-                    context = ""
-                    logger.info(
-                        f"Docs skipped (weak score): best_score={best_score:.2f} "
-                        f"< {self._fallback_min_score} for '{user_message[:50]}...'"
-                    )
+            context = search_response.context
         else:
             context = ""
             logger.info(
-                f"No results after filtering for '{user_message[:50]}...', "
-                "replying with 'no info in docs'"
+                "No results found. Search query: %r",
+                user_message,
             )
-
-        # Carry over previous docs context for short related follow-ups.
-        if (context is None or not context.strip()) and carryover_context and carryover_query:
-            if self._router.is_related(user_message, carryover_query):
-                context = carryover_context
-                logger.info(
-                    f"Using carryover context for '{user_message[:50]}...' "
-                    f"related to '{carryover_query[:50]}...'"
-                )
 
         return context
 
@@ -89,8 +55,6 @@ class ChatService:
         self,
         user_message: str,
         history: ChatHistory,
-        carryover_context: str | None = None,
-        carryover_query: str | None = None,
     ) -> AsyncIterator[tuple[str, Optional[SearchResponse], str, str | None]]:
         """Process user message using LLM-based classification.
 
@@ -102,9 +66,6 @@ class ChatService:
         Args:
             user_message: User's message.
             history: Chat history.
-            carryover_context: Previous docs context for follow-ups.
-            carryover_query: Previous query for follow-up detection.
-
         Yields:
             Tuples of (token, search_response, answer_mode, context_used).
             search_response is only set on first yield.
@@ -113,8 +74,8 @@ class ChatService:
         # what was already said (avoids repeating greetings etc.)
         recent_history = history.to_list()[-4:] if history.messages else []
 
-        # For docs phase: use semantically filtered history
-        history_list = self._router.select_history(user_message, history)
+        # For docs phase: use full recent history
+        history_list = history.to_list()
 
         # Phase 1: LLM classifies and either answers or signals [SEARCH]/[TEMPLATE]
         signal = None
@@ -125,10 +86,12 @@ class ChatService:
         ):
             if token == _SEARCH_SIGNAL:
                 signal = _SEARCH_SIGNAL
-                break
+                continue
             if token == _TEMPLATE_SIGNAL:
                 signal = _TEMPLATE_SIGNAL
-                break
+                continue
+            if signal is not None:
+                continue
             buffer_tokens.append(token)
 
         if signal == _TEMPLATE_SIGNAL:
@@ -139,9 +102,12 @@ class ChatService:
         if signal == _SEARCH_SIGNAL:
             # Phase 2: Search DB
             search_response = self._search.search(user_message)
+            if not search_response.results:
+                yield ("", search_response, "docs", None)
+                yield ("В документах компанії немає інформації з цього питання.", None, "docs", None)
+                return
             context = self._resolve_context(
                 search_response, user_message,
-                carryover_context, carryover_query,
             )
             answer_mode = "docs"
             context_used = context if context and context.strip() else None
@@ -165,19 +131,20 @@ class ChatService:
         self,
         user_message: str,
         history: ChatHistory,
-        carryover_context: str | None = None,
-        carryover_query: str | None = None,
     ) -> AsyncIterator[tuple[str, Optional[SearchResponse], str, str | None]]:
         """Search DB and respond — skips LLM classification.
 
         Used as fallback when [TEMPLATE] was detected but no template matched.
         """
-        history_list = self._router.select_history(user_message, history)
+        history_list = history.to_list()
 
         search_response = self._search.search(user_message)
+        if not search_response.results:
+            yield ("", search_response, "docs", None)
+            yield ("В документах компанії немає інформації з цього питання.", None, "docs", None)
+            return
         context = self._resolve_context(
             search_response, user_message,
-            carryover_context, carryover_query,
         )
         context_used = context if context and context.strip() else None
 

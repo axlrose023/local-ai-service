@@ -66,7 +66,6 @@ def configure_container(settings: Settings) -> Container:
     from .core.protocols.vector_store import VectorStoreProtocol
     from .core.services.chat_service import ChatService
     from .core.services.ingest_service import IngestService
-    from .core.services.router_service import RouterService
     from .core.services.search_service import SearchService
     from .core.services.template_service import TemplateService
     from .infrastructure.embeddings.sentence_transformer import (
@@ -125,22 +124,10 @@ def configure_container(settings: Settings) -> Container:
     )
 
     container.register(
-        RouterService,
-        lambda: RouterService(
-            embedder=container.resolve(EmbedderProtocol),
-            config_path=settings.router_config_path,
-            threshold=settings.router_threshold,
-        ),
-        singleton=True,
-    )
-
-    container.register(
         ChatService,
         lambda: ChatService(
             llm=container.resolve(LLMProtocol),
             search_service=container.resolve(SearchService),
-            router=container.resolve(RouterService),
-            fallback_min_score=settings.rag_fallback_min_score,
         ),
         singleton=True,
     )

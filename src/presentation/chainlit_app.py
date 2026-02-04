@@ -18,6 +18,27 @@ from src.core.services.template_service import TemplateService
 configure_container(settings)
 
 
+def _extract_meaningful_query(text: str, router: RouterService) -> tuple[str, bool]:
+    """Extract meaningful query from a possibly multi-line message.
+
+    Returns:
+        (query, is_all_casual): If the message mixes casual lines with real
+        questions, returns only the substantive parts. If everything is casual,
+        returns the original text with is_all_casual=True.
+    """
+    lines = [line.strip() for line in text.strip().split("\n") if line.strip()]
+
+    if len(lines) <= 1:
+        return text.strip(), router.is_casual(text)
+
+    substantive = [line for line in lines if not router.is_casual(line)]
+
+    if not substantive:
+        return text.strip(), True
+
+    return "\n".join(substantive), False
+
+
 def _is_source_question(text: str) -> bool:
     t = (text or "").lower()
     patterns = [
@@ -151,54 +172,64 @@ async def main(message: cl.Message):
         history.add_pair(user_input, response)
         return
 
-    # Handle casual messages
+    # Extract meaningful query from multi-line messages
     router = container.resolve(RouterService)
-    if router.is_casual(user_input):
+    query, is_all_casual = _extract_meaningful_query(user_input, router)
+
+    # Handle fully casual messages
+    if is_all_casual:
         text = user_input.lower()
         if any(k in text for k in ["дякую", "спасибо"]):
-            response = "Будь ласка!"
-        elif any(k in text for k in ["привіт", "вітаю", "добрий день", "hello", "hi"]):
-            response = "Вітаю!"
+            response = "Будь ласка! Якщо буде ще щось — звертайтеся."
+        elif any(k in text for k in ["привіт", "вітаю", "добрий день", "hello", "hi", "хай"]):
+            response = "Вітаю! Чим можу допомогти?"
         elif any(k in text for k in ["бувай", "до побачення", "пока"]):
-            response = "До побачення!"
+            response = "До побачення! Гарного дня!"
         else:
-            response = "Гаразд."
+            response = "Зрозуміло. Якщо є питання — я тут, щоб допомогти!"
         await cl.Message(content=response).send()
         history.add_pair(user_input, response)
         cl.user_session.set("last_answer_source", "general")
         return
 
-    # Check for template request
+    # Check for template request (using extracted query)
     template_service = container.resolve(TemplateService)
-    template_match = template_service.match(user_input)
+    template_match = template_service.match(query)
 
     if template_match:
         if template_match.confidence == MatchConfidence.HIGH:
             if template_match.path.exists():
+                response = f"Ось шаблон **{template_match.display_name}**:"
                 await cl.Message(
-                    content=f"Ось шаблон **{template_match.display_name}**:",
+                    content=response,
                     elements=[cl.File(name=template_match.file_name, path=str(template_match.path))]
                 ).send()
             else:
-                await cl.Message(
-                    content=f"Шаблон **{template_match.display_name}** наразі недоступний. Зверніться до адміністратора."
-                ).send()
+                response = (
+                    f"Шаблон **{template_match.display_name}** наразі недоступний. "
+                    "Зверніться до адміністратора."
+                )
+                await cl.Message(content=response).send()
+            history.add_pair(user_input, response)
+            cl.user_session.set("last_answer_source", "general")
             return
 
         elif template_match.confidence == MatchConfidence.MEDIUM:
             cl.user_session.set("pending_template", template_match)
             cl.user_session.set("pending_template_query", user_input)
+            response = f"Можливо, вам потрібен шаблон **{template_match.display_name}**?"
             await cl.Message(
-                content=f"Можливо, вам потрібен шаблон **{template_match.display_name}**?",
+                content=response,
                 actions=[
                     cl.Action(name="download_template", value="yes", label="Так, завантажити"),
                     cl.Action(name="download_template", value="no", label="Ні, просто відповідь")
                 ]
             ).send()
+            history.add_pair(user_input, response)
             return
 
-    # Standard RAG flow
-    await _run_standard_flow(user_input, history)
+    # Standard RAG flow (use extracted query for search, but keep original for history)
+    await _run_standard_flow(query, history)
 
 
 @cl.action_callback("download_template")

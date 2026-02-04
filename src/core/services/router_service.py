@@ -84,6 +84,12 @@ class RouterService:
             self._log(f"Skip: too short ({len(text)} chars)")
             return False
 
+        # Exact casual patterns — never search for conversational fillers
+        for pattern in self._config.get("exact_casual_patterns", []):
+            if text == pattern:
+                self._log(f"Skip exact casual: '{pattern}'")
+                return False
+
         for pattern in self._config.get("skip_patterns", []):
             if pattern in text:
                 self._log(f"Skip pattern: '{pattern}'")
@@ -134,9 +140,17 @@ class RouterService:
         text = query.lower().strip()
         if len(text) < 3:
             return True
+
+        # Exact match for conversational fillers ("не знаю", "ем", "гаразд", etc.)
+        for pattern in self._config.get("exact_casual_patterns", []):
+            if text == pattern:
+                return True
+
+        # Substring match for greetings/thanks/etc.
         for pattern in self._config.get("skip_patterns", []):
             if pattern in text:
                 return True
+
         return False
 
     def has_keyword(self, query: str) -> bool:

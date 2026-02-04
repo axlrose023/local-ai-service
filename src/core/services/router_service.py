@@ -52,6 +52,7 @@ class RouterService:
             return {
                 "skip_patterns": ["привіт", "дякую", "бувай"],
                 "keywords": ["vpn", "відпустка", "пароль"],
+                "general_patterns": ["що таке", "що це", "що означає"],
                 "semantic_anchors": [],
                 "threshold": 0.78,
                 "history_threshold": 0.55,
@@ -135,6 +136,14 @@ class RouterService:
             return True
         for pattern in self._config.get("skip_patterns", []):
             if pattern in text:
+                return True
+        return False
+
+    def has_keyword(self, query: str) -> bool:
+        """Check if query contains any routing keyword."""
+        text = query.lower().strip()
+        for keyword in self._config.get("keywords", []):
+            if keyword in text:
                 return True
         return False
 

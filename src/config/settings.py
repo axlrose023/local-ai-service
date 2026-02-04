@@ -24,6 +24,7 @@ class Settings(BaseSettings):
     rag_vector_threshold: float = 0.3
     rag_reranker_threshold: float = 0.0
     rag_score_ratio: float = 0.3
+    rag_fallback_min_score: float = 0.0
     chunk_size: int = 1000
     chunk_overlap: int = 200
 

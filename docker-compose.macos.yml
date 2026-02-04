@@ -1,0 +1,60 @@
+# macOS (Apple Silicon) + GPU через нативний Ollama (Metal)
+#
+# Docker Desktop на macOS не надає GPU passthrough для контейнерів,
+# тому найшвидший варіант — запускати Ollama НАТИВНО на хості,
+# а контейнери підключати до нього через host.docker.internal.
+#
+# Перед запуском:
+#   1) Встановіть Ollama для macOS
+#   2) Запустіть: ollama serve
+#   3) Завантажте модель: ollama pull qwen2.5:7b
+#
+# Запуск:
+#   docker compose -f docker-compose.macos.yml up -d --build
+
+services:
+  chroma:
+    image: chromadb/chroma:0.5.23
+    container_name: rag-chroma
+    ports:
+      - "8001:8000"
+    volumes:
+      - chroma_data:/chroma/chroma
+    environment:
+      - ANONYMIZED_TELEMETRY=false
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/api/v1/heartbeat"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    restart: unless-stopped
+
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: rag-app
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./docs:/app/docs:ro
+      - ./router_config.json:/app/router_config.json:ro
+      - hf_cache:/root/.cache/huggingface
+    env_file: .env
+    environment:
+      - CHROMA_HOST=chroma
+      - CHROMA_PORT=8000
+      - LLM_BASE_URL=http://host.docker.internal:11434/v1
+      - LLM_MODEL=${LLM_MODEL:-qwen2.5:7b}
+      - HF_HOME=/root/.cache/huggingface
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    depends_on:
+      chroma:
+        condition: service_healthy
+    restart: unless-stopped
+
+volumes:
+  chroma_data:
+  hf_cache:

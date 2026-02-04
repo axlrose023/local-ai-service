@@ -139,6 +139,7 @@ def configure_container(settings: Settings) -> Container:
             llm=container.resolve(LLMProtocol),
             search_service=container.resolve(SearchService),
             router=container.resolve(RouterService),
+            fallback_min_score=settings.rag_fallback_min_score,
         ),
         singleton=True,
     )

@@ -9,16 +9,16 @@ class MatchConfidence(Enum):
     """Confidence level for template match."""
     HIGH = "high"      # > high_threshold: deliver file immediately
     MEDIUM = "medium"  # between thresholds: ask for confirmation
-    LOW = "low"        # < low_threshold: go to RAG
+    LOW = "low"        # < low_threshold: not relevant
 
 
 @dataclass
 class TemplateInfo:
     """Template metadata from config."""
+    id: str
     file: str
     name: str
     description: str
-    triggers: list[str]
 
 
 @dataclass
@@ -28,7 +28,7 @@ class TemplateMatch:
     path: Path
     score: float
     confidence: MatchConfidence
-    matched_by: str  # "trigger" or "semantic"
+    matched_by: str  # "id" or "semantic"
 
     @property
     def file_name(self) -> str:

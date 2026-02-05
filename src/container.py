@@ -150,8 +150,7 @@ def configure_container(settings: Settings) -> Container:
             embedder=container.resolve(EmbedderProtocol),
             templates_path=settings.templates_path,
             config_path=settings.templates_config_path,
-            high_threshold=settings.templates_high_threshold,
-            low_threshold=settings.templates_low_threshold,
+            suggest_threshold=settings.templates_suggest_threshold,
         ),
         singleton=True,
     )

@@ -30,8 +30,7 @@ class Settings(BaseSettings):
     # Templates
     templates_path: str = "./templates"
     templates_config_path: str = "templates_config.json"
-    templates_high_threshold: float = 0.85
-    templates_low_threshold: float = 0.82
+    templates_suggest_threshold: float = 0.75
 
     class Config:
         env_file = ".env"

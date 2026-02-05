@@ -9,8 +9,7 @@ import chainlit as cl
 
 from src.config.settings import settings
 from src.container import configure_container, container
-from src.core.models.chat import ChatHistory
-from src.core.models.template import MatchConfidence
+from src.core.models.chat import ChatHistory, ChatMessage
 from src.core.protocols.embedder import EmbedderProtocol
 from src.core.protocols.llm import LLMProtocol
 from src.core.services.chat_service import ChatService
@@ -18,7 +17,7 @@ from src.core.services.template_service import TemplateService
 
 configure_container(settings)
 
-# CJK characters + CJK punctuation (，。？！：；、）
+# CJK characters + CJK punctuation
 _CJK_RE = re.compile(r"[\u3000-\u303f\u3040-\u30ff\u3400-\u4dbf\u4e00-\u9fff\uac00-\ud7af\uff00-\uffef]")
 _LATIN_RE = re.compile(r"[A-Za-z]")
 _CYR_RE = re.compile(r"[А-Яа-яІіЇїЄєҐґ]")
@@ -93,41 +92,67 @@ def _is_source_question(text: str) -> bool:
     return any(p in t for p in patterns)
 
 
-async def _handle_template(user_input: str, history: ChatHistory) -> None:
-    """Handle LLM-detected template request using semantic matching."""
+async def _handle_template(user_input: str, history: ChatHistory, template_id: str | None = None) -> None:
+    """Handle LLM-detected template request.
+
+    If template_id is provided (from [TEMPLATE:id] signal), look up directly.
+    Otherwise fall back to semantic matching, then to search flow.
+    """
     template_service = container.resolve(TemplateService)
     llm = container.resolve(LLMProtocol)
 
-    # Build context-aware query for template matching
-    # e.g. "А є приклад?" + history about відпустка → "шаблон заяви на відпустку"
-    history_list = history.to_list()
-    if history_list:
-        expanded_query = await llm.generate_search_query(
-            user_message=user_input,
-            history=history_list,
-        )
-    else:
-        expanded_query = user_input
+    template_match = None
 
-    template_match = template_service.match(expanded_query)
+    # Try direct lookup by LLM-provided id
+    if template_id:
+        template_match = template_service.get_by_id(template_id)
+
+    # Fallback: semantic matching on expanded query
+    if not template_match:
+        history_list = history.to_list()
+        if history_list:
+            expanded_query = await llm.generate_search_query(
+                user_message=user_input,
+                history=history_list,
+            )
+        else:
+            expanded_query = user_input
+
+        template_match = template_service.suggest_for_query(expanded_query)
 
     if template_match and template_match.path.exists():
-        if template_match.confidence in (MatchConfidence.HIGH, MatchConfidence.MEDIUM):
-            description = template_match.template.description
-            response = (
-                f"Ось шаблон **{template_match.display_name}**:\n\n"
-                f"{description}"
-            )
-            await cl.Message(
-                content=response,
-                elements=[cl.File(name=template_match.file_name, path=str(template_match.path))]
-            ).send()
-            history.add_pair(user_input, response)
-            cl.user_session.set("last_answer_source", "general")
-            return
+        description = template_match.template.description
+        response = (
+            f"Ось шаблон **{template_match.display_name}**:\n\n"
+            f"{description}"
+        )
+        await cl.Message(
+            content=response,
+            elements=[cl.File(name=template_match.file_name, path=str(template_match.path))]
+        ).send()
+        history.add_pair(user_input, response)
+        cl.user_session.set("last_answer_source", "general")
+        return
 
     # No matching template found — fall back to search flow
     await _run_search_flow(user_input, history)
+
+
+async def _suggest_template_if_relevant(user_input: str, history: ChatHistory) -> None:
+    """After a docs-mode response, suggest a related template if relevant."""
+    template_service = container.resolve(TemplateService)
+    suggestion = template_service.suggest_for_query(user_input)
+
+    if suggestion and suggestion.path.exists():
+        response = (
+            f"До речі, у мене є шаблон **{suggestion.display_name}**, "
+            f"який може бути корисним."
+        )
+        await cl.Message(
+            content=response,
+            elements=[cl.File(name=suggestion.file_name, path=str(suggestion.path))]
+        ).send()
+        history.add(ChatMessage(role="assistant", content=response))
 
 
 async def _run_search_flow(user_input: str, history: ChatHistory) -> None:
@@ -181,6 +206,9 @@ async def _run_search_flow(user_input: str, history: ChatHistory) -> None:
     if last_sources:
         cl.user_session.set("last_doc_sources", last_sources)
 
+    # Suggest a related template if relevant
+    await _suggest_template_if_relevant(user_input, history)
+
 
 async def _run_standard_flow(user_input: str, history: ChatHistory) -> None:
     chat_service = container.resolve(ChatService)
@@ -194,7 +222,7 @@ async def _run_standard_flow(user_input: str, history: ChatHistory) -> None:
     last_sources: list[str] = []
 
     try:
-        async for token, search_response, mode, _ in chat_service.process_message(
+        async for token, search_response, mode, context_or_id in chat_service.process_message(
             user_input,
             history,
         ):
@@ -203,7 +231,8 @@ async def _run_standard_flow(user_input: str, history: ChatHistory) -> None:
             if answer_mode == "template":
                 # LLM detected template request — close this message and delegate
                 await msg.remove()
-                await _handle_template(user_input, history)
+                template_id = context_or_id  # chat_service passes template_id here
+                await _handle_template(user_input, history, template_id)
                 return
 
             if search_response and not search_shown:
@@ -243,6 +272,8 @@ async def _run_standard_flow(user_input: str, history: ChatHistory) -> None:
     if answer_mode == "docs":
         if last_sources:
             cl.user_session.set("last_doc_sources", last_sources)
+        # Suggest a related template if relevant
+        await _suggest_template_if_relevant(user_input, history)
     else:
         cl.user_session.set("last_doc_sources", [])
 
@@ -258,8 +289,8 @@ async def start():
     container.resolve(TemplateService)
 
     await cl.Message(
-        content="Вітаю! Я корпоративний AI-помічник УДО.\n\n"
-        "Задайте питання щодо документів компанії, і я постараюся допомогти."
+        content="Вітаю! Я AI-помічник Управління Державної охорони України.\n\n"
+        "Задайте питання щодо службових документів, і я постараюся допомогти."
     ).send()
 
 
@@ -279,17 +310,17 @@ async def main(message: cl.Message):
             if last_sources:
                 sources = ", ".join(last_sources)
                 response = (
-                    "Відповідь була сформована на основі документів компанії: "
+                    "Відповідь була сформована на основі документів УДО: "
                     f"{sources}."
                 )
             else:
                 response = (
-                    "Я відповідав на основі документів компанії, але в них немає "
+                    "Я відповідав на основі документів УДО, але в них немає "
                     "прямої відповіді на це питання."
                 )
         elif last_source == "general":
             response = (
-                "Це була відповідь із загальних знань, а не з документів компанії."
+                "Це була відповідь із загальних знань, а не зі службових документів."
             )
         else:
             response = (

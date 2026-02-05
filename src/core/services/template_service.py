@@ -1,4 +1,4 @@
-"""Template service - hybrid template matching with triggers and semantic search."""
+"""Template service - LLM-driven template selection with semantic suggestion fallback."""
 
 import json
 import logging
@@ -20,16 +20,15 @@ class TemplateService:
         embedder: EmbedderProtocol,
         templates_path: str = "./templates",
         config_path: str = "templates_config.json",
-        high_threshold: float = 0.85,
-        low_threshold: float = 0.70,
+        suggest_threshold: float = 0.75,
     ):
         self._embedder = embedder
         self._templates_path = Path(templates_path)
         self._config_path = Path(config_path)
-        self._high_threshold = high_threshold
-        self._low_threshold = low_threshold
+        self._suggest_threshold = suggest_threshold
 
         self._templates: list[TemplateInfo] = []
+        self._templates_by_id: dict[str, TemplateInfo] = {}
         self._template_embeddings: dict[str, np.ndarray] = {}
 
         self._load_config()
@@ -46,12 +45,13 @@ class TemplateService:
 
             for item in config.get("templates", []):
                 template = TemplateInfo(
+                    id=item["id"],
                     file=item["file"],
                     name=item["name"],
                     description=item["description"],
-                    triggers=item.get("triggers", []),
                 )
                 self._templates.append(template)
+                self._templates_by_id[template.id] = template
 
             logger.info(f"Loaded {len(self._templates)} templates from config")
         except Exception as e:
@@ -62,9 +62,7 @@ class TemplateService:
             return
 
         for template in self._templates:
-            text_for_embedding = (
-                f"{template.name}. {template.description}. {' '.join(template.triggers)}"
-            )
+            text_for_embedding = f"{template.name}. {template.description}"
             embedding = self._embedder.encode(f"passage: {text_for_embedding}")
             self._template_embeddings[template.file] = embedding
 
@@ -72,42 +70,30 @@ class TemplateService:
             f"Computed embeddings for {len(self._template_embeddings)} templates"
         )
 
-    def _match_triggers(self, query: str) -> Optional[tuple[TemplateInfo, float]]:
-        query_lower = query.lower()
-        query_words = set(query_lower.split())
+    def get_by_id(self, template_id: str) -> Optional[TemplateMatch]:
+        """Get template by LLM-assigned id (e.g. 'відпустка')."""
+        template = self._templates_by_id.get(template_id)
+        if not template:
+            return None
 
-        best_match: Optional[TemplateInfo] = None
-        best_score = 0.0
+        file_path = self._templates_path / template.file
+        if not file_path.exists():
+            logger.warning(f"Template file not found: {file_path}")
+            return None
 
-        for template in self._templates:
-            for trigger in template.triggers:
-                trigger_lower = trigger.lower()
-                trigger_words = set(trigger_lower.split())
+        return TemplateMatch(
+            template=template,
+            path=file_path,
+            score=1.0,
+            confidence=MatchConfidence.HIGH,
+            matched_by="id",
+        )
 
-                if trigger_lower in query_lower:
-                    base_score = len(trigger_lower) / max(len(query_lower), 1)
-                    word_bonus = min(0.3, len(trigger_words) * 0.1)
-                    coverage_bonus = 0.2 if base_score > 0.5 else 0.0
-                    score = min(1.0, base_score + word_bonus + coverage_bonus)
+    def suggest_for_query(self, query: str) -> Optional[TemplateMatch]:
+        """Suggest a template based on semantic similarity to user query.
 
-                    if score > best_score:
-                        best_score = score
-                        best_match = template
-
-                elif trigger_words & query_words:
-                    overlap = len(trigger_words & query_words)
-                    total = len(trigger_words | query_words)
-                    score = overlap / total * 0.6
-
-                    if score > best_score:
-                        best_score = score
-                        best_match = template
-
-        if best_match and best_score > 0.3:
-            return (best_match, best_score)
-        return None
-
-    def _match_semantic(self, query: str) -> Optional[tuple[TemplateInfo, float]]:
+        Used after docs-mode response to offer a related template.
+        """
         if not self._template_embeddings:
             return None
 
@@ -131,60 +117,22 @@ class TemplateService:
                 best_score = float(similarity)
                 best_match = template
 
-        if best_match:
-            return (best_match, best_score)
-        return None
+        if best_match and best_score >= self._suggest_threshold:
+            file_path = self._templates_path / best_match.file
+            if not file_path.exists():
+                return None
 
-    def _get_confidence(self, score: float) -> MatchConfidence:
-        if score >= self._high_threshold:
-            return MatchConfidence.HIGH
-        elif score >= self._low_threshold:
-            return MatchConfidence.MEDIUM
-        else:
-            return MatchConfidence.LOW
-
-    def match(self, query: str) -> Optional[TemplateMatch]:
-        if not self._templates:
-            return None
-
-        trigger_result = self._match_triggers(query)
-        if trigger_result:
-            template, score = trigger_result
-            boosted_score = min(1.0, score + 0.15)
-            confidence = self._get_confidence(boosted_score)
-
-            if confidence != MatchConfidence.LOW:
-                file_path = self._templates_path / template.file
-                logger.info(
-                    f"Trigger match: '{template.name}' "
-                    f"score={boosted_score:.2f} ({confidence.value})"
-                )
-                return TemplateMatch(
-                    template=template,
-                    path=file_path,
-                    score=boosted_score,
-                    confidence=confidence,
-                    matched_by="trigger",
-                )
-
-        semantic_result = self._match_semantic(query)
-        if semantic_result:
-            template, score = semantic_result
-            confidence = self._get_confidence(score)
-
-            if confidence != MatchConfidence.LOW:
-                file_path = self._templates_path / template.file
-                logger.info(
-                    f"Semantic match: '{template.name}' "
-                    f"score={score:.2f} ({confidence.value})"
-                )
-                return TemplateMatch(
-                    template=template,
-                    path=file_path,
-                    score=score,
-                    confidence=confidence,
-                    matched_by="semantic",
-                )
+            logger.info(
+                f"Template suggestion: '{best_match.name}' "
+                f"score={best_score:.2f} for query='{query[:60]}'"
+            )
+            return TemplateMatch(
+                template=best_match,
+                path=file_path,
+                score=best_score,
+                confidence=MatchConfidence.MEDIUM,
+                matched_by="semantic",
+            )
 
         return None
 

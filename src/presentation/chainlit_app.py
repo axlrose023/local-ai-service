@@ -170,69 +170,6 @@ async def _handle_template(
     await _run_search_flow(user_input, history)
 
 
-_MAX_TEMPLATE_QUERY_LENGTH = 800
-
-
-def _query_for_template_suggestion(
-    user_input: str,
-    history: ChatHistory,
-    context_query: str | None = None,
-) -> str:
-    """Build a rich query for template matching using conversation context.
-    Uses context_query (e.g. search query) and/or recent messages so that
-    follow-ups like 'А є більш детальна інформація?' still map to the right template.
-    """
-    parts: list[str] = []
-    if context_query and context_query.strip():
-        parts.append(context_query.strip())
-    # Add recent user messages so "щодо цього" refers to the right topic (skip long assistant replies)
-    recent = history.to_list()[-4:]
-    for m in recent:
-        if m.get("role") == "user" and m.get("content", "").strip():
-            parts.append(m["content"].strip())
-    parts.append(user_input.strip())
-    combined = " ".join(p for p in parts if p)
-    if len(combined) > _MAX_TEMPLATE_QUERY_LENGTH:
-        combined = combined[:_MAX_TEMPLATE_QUERY_LENGTH].rsplit(" ", 1)[0]
-    return combined
-
-
-async def _suggest_template_if_relevant(
-    user_input: str,
-    history: ChatHistory,
-    context_query: str | None = None,
-) -> None:
-    """After a docs-mode response, suggest a related template if relevant.
-    Skips templates that were already suggested or sent in this conversation.
-    Uses context_query and recent history for better mapping (e.g. mat. dopomoga -> рапорт).
-    """
-    already_used = set(cl.user_session.get("suggested_or_sent_templates", []))
-    template_service = container.resolve(TemplateService)
-    query_for_suggestion = _query_for_template_suggestion(
-        user_input, history, context_query
-    )
-    suggestion = template_service.suggest_for_query(query_for_suggestion)
-
-    if not suggestion or not suggestion.path.exists():
-        return
-    if suggestion.template.id in already_used:
-        return
-
-    response = (
-        f"До речі, у мене є шаблон **{suggestion.display_name}**, "
-        f"який може бути корисним."
-    )
-    await cl.Message(
-        content=response,
-        elements=[cl.File(name=suggestion.file_name, path=str(suggestion.path))],
-    ).send()
-    history.add(ChatMessage(role="assistant", content=response))
-    # Remember so we don't suggest the same template again
-    sent = list(already_used)
-    sent.append(suggestion.template.id)
-    cl.user_session.set("suggested_or_sent_templates", sent)
-
-
 async def _run_search_flow(user_input: str, history: ChatHistory) -> None:
     """Fallback: run RAG search flow (skips LLM classification)."""
     chat_service = container.resolve(ChatService)
@@ -242,7 +179,6 @@ async def _run_search_flow(user_input: str, history: ChatHistory) -> None:
 
     full_response = ""
     last_sources: list[str] = []
-    last_search_query: str | None = None
 
     try:
         async for token, search_response, _, _ in chat_service.search_and_respond(
@@ -251,7 +187,6 @@ async def _run_search_flow(user_input: str, history: ChatHistory) -> None:
         ):
             if search_response:
                 search_query = (search_response.search_query or user_input).strip()
-                last_search_query = search_query
                 async with cl.Step(name="Пошук у базі знань") as step:
                     step.input = user_input
                     if search_response.results:
@@ -286,11 +221,6 @@ async def _run_search_flow(user_input: str, history: ChatHistory) -> None:
     if last_sources:
         cl.user_session.set("last_doc_sources", last_sources)
 
-    # Suggest a related template using search query + history for better mapping
-    await _suggest_template_if_relevant(
-        user_input, history, context_query=last_search_query
-    )
-
 
 async def _run_standard_flow(user_input: str, history: ChatHistory) -> None:
     chat_service = container.resolve(ChatService)
@@ -302,7 +232,6 @@ async def _run_standard_flow(user_input: str, history: ChatHistory) -> None:
     search_shown = False
     answer_mode = "general"
     last_sources: list[str] = []
-    last_search_query: str | None = None
 
     try:
         async for (
@@ -325,7 +254,6 @@ async def _run_standard_flow(user_input: str, history: ChatHistory) -> None:
 
             if search_response and not search_shown:
                 search_query = (search_response.search_query or user_input).strip()
-                last_search_query = search_query
                 async with cl.Step(name="Пошук у базі знань") as step:
                     step.input = user_input
                     if search_response.results:
@@ -361,10 +289,6 @@ async def _run_standard_flow(user_input: str, history: ChatHistory) -> None:
     if answer_mode == "docs":
         if last_sources:
             cl.user_session.set("last_doc_sources", last_sources)
-        # Suggest a related template using search query + history for better mapping
-        await _suggest_template_if_relevant(
-            user_input, history, context_query=last_search_query
-        )
     else:
         cl.user_session.set("last_doc_sources", [])
 

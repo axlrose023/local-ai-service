@@ -1,9 +1,7 @@
-
 from pydantic_settings import BaseSettings
 
 
 class Settings(BaseSettings):
-
     chroma_host: str = "localhost"
     chroma_port: int = 8001
     chroma_collection: str = "ukr_docs_v2"
@@ -30,7 +28,7 @@ class Settings(BaseSettings):
     # Templates
     templates_path: str = "./templates"
     templates_config_path: str = "templates_config.json"
-    templates_suggest_threshold: float = 0.75
+    templates_suggest_threshold: float = 0.82
 
     class Config:
         env_file = ".env"
